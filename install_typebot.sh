@@ -36,81 +36,86 @@ get_free_port() {
             eval $port_var_name=$selected_port
             break
         else
-            echo -e "${RED}A porta $selected_port já está em uso. Por favor, escolha outra.${NC}"
+            echo -e "${RED}A porta $selected_port já está em uso. Escolha outra.${NC}"
         fi
     done
 }
 
-echo -e "${GREEN}### Instalador Otimizado Typebot ###${NC}"
+echo -e "${GREEN}### Instalador Inteligente Typebot (Customizável) ###${NC}"
 echo "-----------------------------------"
 
-# 1. Seleção do Tipo de Ambiente
-echo -e "${YELLOW}Qual o seu ambiente de instalação?${NC}"
-echo "1) VPS Autônoma (Instalar Nginx e Certbot automaticamente)"
-echo "2) VPS com Painel (Plesk/CloudPanel/CyberPanel - Apenas Docker)"
+# 1. Seleção de Ambiente
+echo -e "${YELLOW}Selecione o cenário do seu servidor:${NC}"
+echo "1) VPS Limpa OU com SaaS (Whaticket/Izing) -> (Instala Nginx e SSL)"
+echo "2) VPS com Painel (Plesk/CloudPanel) -> (Apenas Docker, sem Nginx)"
 read -p "Opção [1/2]: " ENV_OPTION
 
-# 2. Coleta de Informações Básicas
+# 2. Configurações de Domínio
 echo -e "\n${YELLOW}--- Configurações de Domínio ---${NC}"
-read -p "Domínio para o Typebot (Builder) (ex: typebot.com): " TYPEBOT_DOMAIN
-read -p "Domínio para o Chat (Viewer) (ex: chat.typebot.com): " CHAT_DOMAIN
-read -p "Domínio para o Storage (Minio) (ex: s3.typebot.com): " STORAGE_DOMAIN
-read -p "Email do administrador: " ADMIN_EMAIL
+read -p "Domínio Typebot (Builder): " TYPEBOT_DOMAIN
+read -p "Domínio Chat (Viewer): " CHAT_DOMAIN
+read -p "Domínio Storage (Minio): " STORAGE_DOMAIN
+read -p "Email do Administrador: " ADMIN_EMAIL
 
-echo -e "\n${YELLOW}--- Configurações de Porta (Docker) ---${NC}"
-get_free_port "Porta interna para o Builder" "3000" "TYPEBOT_PORT"
-get_free_port "Porta interna para o Viewer" "3001" "CHAT_PORT"
-get_free_port "Porta interna para o Minio API" "9000" "MINIO_PORT"
-# Minio Console precisa de uma porta separada agora para evitar conflitos
-get_free_port "Porta interna para o Minio Console" "9001" "MINIO_CONSOLE_PORT"
+# 3. Configurações de Banco de Dados (PostgreSQL)
+echo -e "\n${YELLOW}--- Configurações do PostgreSQL ---${NC}"
+read -p "Qual versão do Postgres deseja usar? (Ex: 15, 16, 17) [Padrão: 16]: " POSTGRES_VERSION
+POSTGRES_VERSION=${POSTGRES_VERSION:-16}
 
-echo -e "\n${YELLOW}--- Configurações do Banco de Dados ---${NC}"
-read -p "Senha para o PostgreSQL: " POSTGRES_PASSWORD
-read -p "Deseja expor a porta do Banco de Dados para acesso externo? (s/n): " EXPOSE_DB
+read -p "Defina a senha para o PostgreSQL: " POSTGRES_PASSWORD
+read -p "Deseja expor o banco externamente? (s/n): " EXPOSE_DB
 
+DB_PORT_MAPPING=""
 if [[ "$EXPOSE_DB" == "s" || "$EXPOSE_DB" == "S" ]]; then
     get_free_port "Porta externa do PostgreSQL" "5432" "POSTGRES_EXTERNAL_PORT"
     DB_PORT_MAPPING="$POSTGRES_EXTERNAL_PORT:5432"
-    echo -e "${GREEN}Banco de dados será acessível na porta $POSTGRES_EXTERNAL_PORT${NC}"
-else
-    DB_PORT_MAPPING="" # Não mapeia porta, mantém apenas interna no Docker
-    echo -e "${GREEN}Banco de dados mantido apenas internamente no Docker.${NC}"
 fi
 
-echo -e "\n${YELLOW}--- Configurações SMTP (Email) ---${NC}"
-read -p "Host SMTP (ex: smtp.gmail.com): " SMTP_HOST
-read -p "Porta SMTP (ex: 465 ou 587): " SMTP_PORT
+# 4. Configurações do Minio (Storage)
+echo -e "\n${YELLOW}--- Credenciais do Minio (S3) ---${NC}"
+read -p "Usuário Admin do Minio (Padrão: minio): " MINIO_ROOT_USER
+MINIO_ROOT_USER=${MINIO_ROOT_USER:-minio}
+
+read -p "Senha Admin do Minio (Padrão: minio123): " MINIO_ROOT_PASSWORD
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minio123}
+
+# 5. Portas Docker
+echo -e "\n${YELLOW}--- Configurações de Porta (Docker) ---${NC}"
+get_free_port "Porta Builder" "3000" "TYPEBOT_PORT"
+get_free_port "Porta Viewer" "3001" "CHAT_PORT"
+get_free_port "Porta Minio API" "9000" "MINIO_PORT"
+get_free_port "Porta Minio Console" "9001" "MINIO_CONSOLE_PORT"
+
+# 6. SMTP
+echo -e "\n${YELLOW}--- Configurações SMTP ---${NC}"
+read -p "Host SMTP: " SMTP_HOST
+read -p "Porta SMTP: " SMTP_PORT
 read -p "Usuário SMTP: " SMTP_USERNAME
 read -p "Senha SMTP: " SMTP_PASSWORD
 
-# Define SMTP_SECURE
 if [[ "$SMTP_PORT" == "465" ]]; then
   SMTP_SECURE="true"
-elif [[ "$SMTP_PORT" == "587" ]]; then
-  SMTP_SECURE="false"
 else
-  SMTP_SECURE="false" # Default fallback
+  SMTP_SECURE="false"
 fi
 
 # Gera chaves
 ENCRYPTION_SECRET=$(openssl rand -base64 24)
 echo "$ENCRYPTION_SECRET" > encryption_secret.txt
 
-# 3. Verifica Instalação do Docker
+# Verifica Docker
 if ! command -v docker &> /dev/null; then
-    echo -e "${YELLOW}Docker não encontrado. Instalando...${NC}"
+    echo -e "${YELLOW}Instalando Docker...${NC}"
     curl -fsSL https://get.docker.com -o get-docker.sh
     sh get-docker.sh
 fi
 
-# 4. Criação do docker-compose.yml
-echo -e "\n${GREEN}Gerando docker-compose.yml...${NC}"
-
+# Criação do docker-compose.yml
 cat <<EOF > docker-compose.yml
 version: '3.3'
 services:
   typebot-db:
-    image: postgres:13
+    image: postgres:$POSTGRES_VERSION
     restart: always
     volumes:
       - db_data:/var/lib/postgresql/data
@@ -119,7 +124,6 @@ services:
       - POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 EOF
 
-# Adiciona porta somente se solicitado
 if [ ! -z "$DB_PORT_MAPPING" ]; then
 cat <<EOF >> docker-compose.yml
     ports:
@@ -149,11 +153,10 @@ cat <<EOF >> docker-compose.yml
       - SMTP_USERNAME=$SMTP_USERNAME
       - SMTP_PASSWORD=$SMTP_PASSWORD
       - NEXT_PUBLIC_SMTP_FROM='Suporte Typebot' <$ADMIN_EMAIL>
-      - S3_ACCESS_KEY=minio
-      - S3_SECRET_KEY=minio123
+      - S3_ACCESS_KEY=$MINIO_ROOT_USER
+      - S3_SECRET_KEY=$MINIO_ROOT_PASSWORD
       - S3_BUCKET=typebot
       - S3_ENDPOINT=https://$STORAGE_DOMAIN
-      # Ajuste para garantir que o container consiga resolver o endpoint internamente se necessário
       - S3_FORCE_PATH_STYLE=true 
 
   typebot-viewer:
@@ -167,8 +170,8 @@ cat <<EOF >> docker-compose.yml
       - NEXT_PUBLIC_VIEWER_URL=https://$CHAT_DOMAIN
       - NEXTAUTH_URL_INTERNAL=http://localhost:$TYPEBOT_PORT
       - ENCRYPTION_SECRET=$ENCRYPTION_SECRET
-      - S3_ACCESS_KEY=minio
-      - S3_SECRET_KEY=minio123
+      - S3_ACCESS_KEY=$MINIO_ROOT_USER
+      - S3_SECRET_KEY=$MINIO_ROOT_PASSWORD
       - S3_BUCKET=typebot
       - S3_ENDPOINT=https://$STORAGE_DOMAIN
       - S3_FORCE_PATH_STYLE=true
@@ -181,8 +184,8 @@ cat <<EOF >> docker-compose.yml
       - "$MINIO_PORT:9000"
       - "$MINIO_CONSOLE_PORT:9001"
     environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio123
+      MINIO_ROOT_USER: $MINIO_ROOT_USER
+      MINIO_ROOT_PASSWORD: $MINIO_ROOT_PASSWORD
     volumes:
       - s3_data:/data
 
@@ -194,7 +197,7 @@ cat <<EOF >> docker-compose.yml
       /bin/sh -c "
       echo 'Aguardando Minio iniciar...';
       sleep 10;
-      /usr/bin/mc config host add minio http://minio:9000 minio minio123;
+      /usr/bin/mc config host add minio http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD;
       /usr/bin/mc mb minio/typebot;
       /usr/bin/mc anonymous set public minio/typebot/public;
       exit 0;
@@ -205,19 +208,16 @@ volumes:
   s3_data:
 EOF
 
-# Subir containers
-echo -e "\n${GREEN}Iniciando Containers Docker...${NC}"
+echo -e "\n${GREEN}Subindo Containers...${NC}"
 docker compose up -d || docker-compose up -d
 
-# 5. Lógica condicional: Painel vs Autônomo
+# Configuração Nginx (Se Opção 1)
 if [[ "$ENV_OPTION" == "1" ]]; then
-    echo -e "\n${GREEN}Configurando Nginx e SSL (Modo Autônomo)...${NC}"
-    
-    # Instala dependências Nginx/Certbot
+    echo -e "\n${YELLOW}Configurando Nginx...${NC}"
     apt update && apt install nginx certbot python3-certbot-nginx -y
 
-    # Configuração Nginx Typebot (Builder)
-    cat <<EOF > /etc/nginx/sites-available/typebot
+    # Builder
+    cat <<EOF > /etc/nginx/sites-available/typebot_builder
 server {
   listen 80;
   server_name $TYPEBOT_DOMAIN;
@@ -228,12 +228,14 @@ server {
     proxy_set_header Connection 'upgrade';
     proxy_set_header Host \$host;
     proxy_cache_bypass \$http_upgrade;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
 }
 EOF
 
-    # Configuração Nginx Chat (Viewer)
-    cat <<EOF > /etc/nginx/sites-available/chat
+    # Viewer
+    cat <<EOF > /etc/nginx/sites-available/typebot_viewer
 server {
   listen 80;
   server_name $CHAT_DOMAIN;
@@ -244,16 +246,17 @@ server {
     proxy_set_header Connection 'upgrade';
     proxy_set_header Host \$host;
     proxy_cache_bypass \$http_upgrade;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
 }
 EOF
 
-    # Configuração Nginx Minio (Storage)
-    cat <<EOF > /etc/nginx/sites-available/storage
+    # Storage
+    cat <<EOF > /etc/nginx/sites-available/typebot_storage
 server {
   listen 80;
   server_name $STORAGE_DOMAIN;
-  # Habilita uploads maiores para o Minio
   client_max_body_size 100M; 
   location / {
     proxy_pass http://127.0.0.1:$MINIO_PORT;
@@ -262,30 +265,27 @@ server {
     proxy_set_header Connection 'upgrade';
     proxy_set_header Host \$host;
     proxy_cache_bypass \$http_upgrade;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
   }
 }
 EOF
 
-    # Links simbólicos e Reload
-    ln -sf /etc/nginx/sites-available/typebot /etc/nginx/sites-enabled/
-    ln -sf /etc/nginx/sites-available/chat /etc/nginx/sites-enabled/
-    ln -sf /etc/nginx/sites-available/storage /etc/nginx/sites-enabled/
+    ln -sf /etc/nginx/sites-available/typebot_builder /etc/nginx/sites-enabled/
+    ln -sf /etc/nginx/sites-available/typebot_viewer /etc/nginx/sites-enabled/
+    ln -sf /etc/nginx/sites-available/typebot_storage /etc/nginx/sites-enabled/
     
     nginx -t && systemctl restart nginx
     
-    echo -e "\n${YELLOW}Gerando certificados SSL...${NC}"
+    echo -e "\n${YELLOW}Gerando SSL...${NC}"
     certbot --nginx -d $TYPEBOT_DOMAIN -d $CHAT_DOMAIN -d $STORAGE_DOMAIN --non-interactive --agree-tos -m $ADMIN_EMAIL
     
-    echo -e "${GREEN}Instalação Autônoma Concluída!${NC}"
+    echo -e "${GREEN}Instalação Completa!${NC}"
 
 elif [[ "$ENV_OPTION" == "2" ]]; then
-    echo -e "\n${GREEN}Containers iniciados!${NC}"
-    echo -e "${YELLOW}Atenção: Como você usa um Painel (Plesk/CloudPanel), configure os Proxies Reversos manualmente:${NC}"
-    echo "1. Domínio $TYPEBOT_DOMAIN -> http://127.0.0.1:$TYPEBOT_PORT"
-    echo "2. Domínio $CHAT_DOMAIN -> http://127.0.0.1:$CHAT_PORT"
-    echo "3. Domínio $STORAGE_DOMAIN -> http://127.0.0.1:$MINIO_PORT"
-    if [ ! -z "$DB_PORT_MAPPING" ]; then
-        echo "4. Banco de Dados externo disponível em: IP_DO_SERVIDOR:$POSTGRES_EXTERNAL_PORT"
-    fi
-    echo -e "\nNão se esqueça de habilitar o Websocket Support no seu painel."
+    echo -e "\n${GREEN}Instalação Docker Completa!${NC}"
+    echo "Configure seu Painel (CloudPanel/Plesk) para:"
+    echo "$TYPEBOT_DOMAIN -> Porta $TYPEBOT_PORT"
+    echo "$CHAT_DOMAIN -> Porta $CHAT_PORT"
+    echo "$STORAGE_DOMAIN -> Porta $MINIO_PORT"
 fi
