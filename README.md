@@ -57,9 +57,7 @@ Se for necesário converter o script para unix execute o seguinte comando:
 
 ```
 dos2unix install_typebot.sh
-``
-
------
+```
 
 ## 🧩 O Guia de Instalação (Passo a Passo)
 
